@@ -3,79 +3,18 @@
 ; Author: Christopher Sutton - 44680112
 
 .include "./m328Pdef.inc"
-
+  .def  sensors=r26
+  .def  gpiob=r22
+  .def  gpioa=r23
   .DSEG
-state:  .BYTE 1                 ; Setting pointer to state in data segment
+  .ORG 0x100
+
+state:  .BYTE 1                 ; Setting pointer to state in data segmen
   .CSEG
-  .org  0x0000                  ; start at beginning of program address
-
-lcd_init_str: .DB  0x0C,0x01
-;;; Each line of the message buffer can take 16 Characters
-lcd_init_msg1: .DB  "Chris's Magic   "
-lcd_init_msg2: .DB  "Traffic Lights  "
-lcd_state_msg1:.DB  "STATE:     SS:  "
-lcd_state_msg2:.DB  "M:      S:      "
-green_msg:     .DB  "GREEN "
-red_msg:       .DB  "RED   "
-yellow_msg:    .DB  "YELLOW"
-ss1_on:        .DB  "12"
-call    setup_int               ; Setup IVR to no_interrupt
-
-;;; On reset we branch to here
-RESET:                          ; Main program start
-  ldi   r16,high(RAMEND)        ; Set Stack Pointer to top of RAM
-  out   SPH,r16
-  ldi   r16,low(RAMEND)
-  out   SPL,r16
-  sei                           ; Enable interrupts
-
-;;; Calling all initialization routines
-  call init_spi
-  call timer_init
-  call init_port_expander
-  call lcd_init
-
-  call lcd_startup_msg
-  call t1_loop
-  call lcd_init_state_msg
-
-;;; Main loop
-clr r24                         ; Button State B1-SS1 B2-SS2
-lcd_err:
-mainLoop:
-  clr r26
-  call  read_int
-  sbrc  r24,0
-  ori   r26,0b00000111
-  sbrc  r24,1
-  ori   r26,0b00111000
-
-  ldi   r20,0x14
-  mov   r21,r26
-  call  SPI_Send_Command
-  rjmp  mainLoop
-
-read_int:
-  push  r16
-  push  r20
-  ldi   r20,0x0F                ; Address of INTFB
-  call  SPI_Read_Command
-  sbrc  r16,2
-  ori   r24,0b00000001
-  sbrc  r16,3
-  ori   r24,0b00000010
-  ldi   r20,0x13
-  call  SPI_Read_Command
-  call  lcd_set_sensor_state
-  pop   r20
-  pop   r16
-  ret
-
-;;; Helper subroutines
-;;; complete interrupt vector table.
-setup_int:
-    jmp RESET                   ; Reset
-    jmp INT0_IR                 ; IRQ0
+  .org  0x0000
+                                ; start at beginning of program address
+  jmp RESET                   ; Reset
+  jmp INT0_IR                 ; IRQ0
     jmp INT1_IR                 ; IRQ1
     jmp PCINT0_IR               ; PCINT0
     jmp PCINT1_IR               ; PCINT1
@@ -103,7 +42,6 @@ setup_int:
 
 ;;; And we branch to the final location from here.
 ;;; Interrupts we cannot handle in this example we just loop at noint
-INT0_IR:    rjmp  noint
 INT1_IR:    rjmp  noint
 PCINT0_IR:  rjmp  noint
 PCINT1_IR:  rjmp  noint
@@ -128,10 +66,113 @@ EE_RDY:     rjmp  noint
 ANA_COMP:   rjmp  noint
 TWI_IR:     rjmp  noint
 SPM_RDY:    rjmp  noint
-
 error:
-noint:      inc   r16
+noint:
+    inc   r16
     rjmp    noint
+;;; On reset we branch to here
+RESET:                          ; Main program start
+    ldi   r16,high(RAMEND)        ; Set Stack Pointer to top of RAM
+    out   SPH,r16
+    ldi   r16,low(RAMEND)
+    out   SPL,r16
+
+    in    r16,MCUCR             ; set interrupt vector to address 0x0002
+    ori   r16,(1<<IVCE)
+    out   MCUCR,r16
+    andi  r16,0xfc
+    out   MCUCR,r16
+
+    cbi   EIMSK,INT0            ; disable the interrupt -> configure INT0
+    ldi   r16,0b00000010        ; high to low transition interrupt for INT0
+    sts   EICRA,r16
+    sbi   EIMSK,INT0            ; and enable the interrupt for INT0
+    sei                         ; enable interrupts globally
+
+
+lcd_init_str: .DB  0x0C,0x01
+;;; Each line of the message buffer can take 16 Characters
+lcd_init_msg1: .DB  "Chris's Magic   "
+lcd_init_msg2: .DB  "Traffic Lights  "
+lcd_state_msg1:.DB  "STATE:     SS:  "
+lcd_state_msg2:.DB  "M:      S:      "
+green_msg:     .DB  "GREEN "
+red_msg:       .DB  "RED   "
+yellow_msg:    .DB  "YELLOW"
+ss1_on:        .DB  "12"
+digits:        .DB  "0123456789"
+
+
+;;; Calling all initialization routines
+  call init_spi
+  call timer_init
+  call init_port_expander
+  call lcd_init
+
+  call lcd_startup_msg
+  call t2_loop
+  call lcd_init_state_msg
+
+
+;;; Main loop
+clr r24                         ; Button State B1-SS1 B2-SS2
+lcd_err:
+  call clear_mcp_int
+  clr   sensors
+  clr   r27
+  sts   state,r27
+mainLoop:
+
+    call  t2_loop
+    lds   r16, state
+    inc   r16
+    sts   state, r16
+
+    call  state0
+    rjmp  mainLoop
+
+
+state0:
+    call  state_display
+    ret
+
+clear_mcp_int:
+    ldi   r20,0x10
+    call  SPI_Read_Command
+    ldi   r20,0x13                ; Address of GPIOB
+    call  SPI_Read_Command
+    ret
+
+INT0_IR:
+    push  r24
+    push  r16
+    push  r25
+    push  r20
+    call  t1_loop
+    ldi   r20,0x10
+    call  SPI_Read_Command
+    ldi   r20,0x13                ; Address of GPIOB
+    call  SPI_Read_Command
+    mov   gpiob,r16
+    sbrs  gpiob,2
+    ori   sensors,0b00000001
+    sbrs  gpiob,3
+    ori   sensors,0b00000010
+    call   lcd_set_sensor_state
+    pop   r20
+    pop   r25
+    pop   r16
+    pop   r24
+    reti                        ; and we're done with the interrupt
+
+led_state_display:
+    push  r24
+    push  r25
+    ldi   r20,0x14
+    mov   r21,gpioa
+    call  SPI_Send_Command
+    pop   r25
+    pop   r24
     ret
 
 ;;; Initialise I/O ports and peripherals
@@ -210,8 +251,8 @@ timer_init:
     out	TIFR1, r17          ; Output Compare Match B -> OCF1B
     ldi	r16,0b00000000      ; TCCR1A
     sts	TCCR1A, r16         ; PORTA - Normal, PORTB - Normal, WGM=0000(Normal)
-    ldi	r17, HIGH(15625)     ; 1562 is value of counter
-    ldi	r16, LOW(15625)
+    ldi	r17, HIGH(1562)     ; 1562 is value of counter
+    ldi	r16, LOW(1562)
     sts	OCR1BH, r17         ; Setting the top of the compare
     sts	OCR1BL, r16         ; Setting the bottom of the compare
     clr	r17                 ; Clear the current count
@@ -238,6 +279,15 @@ t1_inner:
     sts	TCNT1H, r17           ; TCNT is how you access the timer counter
     sts	TCNT1L, r17           ; The value that OCR1B is looking to compare
     pop	r17
+    ret
+
+t2_loop:
+    ldi   r16,10
+begin_loop:
+    call  t1_loop
+    dec   r16
+    cpi   r16,0
+    brne  begin_loop
     ret
 
 
@@ -347,9 +397,9 @@ lcd_init_state_msg:
 
 lcd_set_sensor_state:
   ;; Setting
-    sbrc  r24,0
+    sbrc  sensors,0
     call  lcd_set_ss1
-    sbrc  r24,1
+    sbrc  sensors,1
     call  lcd_set_ss2
     ret
 
@@ -379,6 +429,117 @@ lcd_set_ss2:
     call  LCD_Text
     pop   r25
     pop   r24
+    ret
+
+state_display:
+    push  r24
+    push  r25
+    ldi   r24,0x27
+    ldi   r25,0x06
+    call  LCD_Position
+    call  load_state
+    call  led_state_display
+    lds   r16, state
+    cpi   r16,10
+    brge  double_digits
+    ldi   ZL,LOW(digits*2)
+    ldi   ZH,HIGH(digits*2)
+    add   ZL,r16
+    ldi   r25,0x01
+    call  LCD_Text
+lcd_cont:
+    ldi   r25,0x42
+    call  LCD_Position
+    mov   ZL,YL
+    mov   ZH,YH
+    ldi   r25,0x06
+    call  LCD_Text
+    ldi   r25,0x4A
+    call  LCD_Position
+    mov   ZL,XL
+    mov   ZH,XH
+    ldi   r25,0x06
+    call  LCD_Text
+    pop   r25
+    pop   r24
+    ret
+
+double_digits:
+    ldi   r24,0x27
+    ldi   r25,0x06
+    call  LCD_Position
+    ldi   ZL,LOW(digits*2+1)
+    ldi   ZH,HIGH(digits*2+1)
+    ldi   r25,0x01
+    call  LCD_Text
+    ldi   r25,0x07
+    call  LCD_Position
+    ldi   ZL,LOW(digits*2)
+    ldi   ZH,HIGH(digits*2)
+    lds   r16, state
+    add   ZL,r16
+    subi  ZL,10
+    ldi   r25,0x01
+    call  LCD_Text
+    rjmp  lcd_cont
+
+load_state:
+    lds   r16,state
+    cpi   r16,0
+    breq  case_0
+    cpi   r16,1
+    breq  case_0
+    cpi   r16,2
+    breq  case_0
+    cpi   r16,3
+    breq  case_0
+    cpi   r16,4
+    breq  case_0
+    cpi   r16,5
+    breq  case_0
+    cpi   r16,6
+    breq  case_0
+    cpi   r16,7
+    breq  case_1
+    cpi   r16,8
+    breq  case_2
+    cpi   r16,9
+    breq  case_2
+    cpi   r16,10
+    breq  case_2
+    cpi   r16,11
+    breq  case_2
+    cpi   r16,12
+    breq  case_3
+    ret
+
+case_0:
+    ldi   YL,LOW(green_msg*2)
+    ldi   YH,HIGH(green_msg*2)
+    ldi   XL,LOW(red_msg*2)
+    ldi   XH,HIGH(red_msg*2)
+    ldi   gpioa, 0b00100001
+    ret
+case_1:
+    ldi   YL,LOW(yellow_msg*2)
+    ldi   YH,HIGH(yellow_msg*2)
+    ldi   XL,LOW(red_msg*2)
+    ldi   XH,HIGH(red_msg*2)
+    ldi   gpioa, 0b00010001
+    ret
+case_2:
+    ldi   YL,LOW(red_msg*2)
+    ldi   YH,HIGH(red_msg*2)
+    ldi   XL,LOW(green_msg*2)
+    ldi   XH,HIGH(green_msg*2)
+    ldi   gpioa, 0b00010100
+    ret
+case_3:
+    ldi   YL,LOW(red_msg*2)
+    ldi   YH,HIGH(red_msg*2)
+    ldi   XL,LOW(yellow_msg*2)
+    ldi   XH,HIGH(yellow_msg*2)
+    ldi   gpioa, 0b00001010
     ret
 ; Helper Functions
 
