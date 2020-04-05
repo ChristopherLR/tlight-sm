@@ -19,15 +19,25 @@ RESET:                          ; Main program start
 
                                 ; Main loop
 mainLoop:
-  ldi   r20, 0x14               ; Output GPIOA
-  ldi   r21, 0xFF
+  clr   r24
+  ldi   r20,0x0F                ; Address of INTFB
+  call  SPI_Read_Command
+  sbrc  r16,2
+  ori   r24,0b00000111
+  sbrc  r16,3
+  ori   r24,0b00111000
+  ldi   r20,0x14                ; Output GPIOA
+  mov   r21,r24
   call  SPI_Send_Command
-  call  t1_loop
+  ldi   r20,0x13                ; Address of INTFB
+  call  SPI_Read_Command
   rjmp mainLoop
 pre_pause:
   call  check_state
   rjmp  mainLoop
 
+lights_on:
+  rjmp  mainLoop
 
 check_state:
   ldi   r20,0x13              ; register GPIOB (port B data input)
@@ -159,9 +169,10 @@ init_spi:
     out	SPSR,r16
     ret
 
-; Send a command + byte to SPI interface
-; CMD is in r20, DATA is in r21
-; r16 is destroyed by this subroutine
+;; Send a command + byte to SPI interface
+;; CMD is in r20, DATA is in r21
+;; r16 is destroyed by this subroutine
+;; SPI_Spec <Device Address><Register Address><Value to write>
 SPI_Send_Command:
     cbi	PORTB,2               ; SS low
     ldi	r16,0x40
@@ -186,7 +197,7 @@ SPI_Read_Command:
     ret
 ; Send one SPI byte (Returned data in r16)
 SPI_SendByte:
-    out		SPDR,r16
+    out   SPDR,r16
 SPI_wait:
     in	r16,SPSR
     sbrs	r16,SPIF
@@ -238,8 +249,8 @@ timer_init:
     out	TIFR1, r17          ; Output Compare Match B -> OCF1B
     ldi	r16,0b00000000      ; TCCR1A
     sts	TCCR1A, r16         ; PORTA - Normal, PORTB - Normal, WGM=0000(Normal)
-    ldi	r17, HIGH(1562)   ; 1562 is value of counter
-    ldi	r16, LOW(1562)
+    ldi	r17, HIGH(15625)     ; 1562 is value of counter
+    ldi	r16, LOW(15625)
     sts	OCR1BH, r17         ; Setting the top of the compare
     sts	OCR1BL, r16         ; Setting the bottom of the compare
     clr	r17                 ; Clear the current count
@@ -269,17 +280,30 @@ t1_inner:
     ret
 
 
-; We will configure port A as all outputs, port B as all inputs.
-; use the SPI_send_command to send the SPI commands.
-; This will require the register address in r20 and the register data in r21
+;;; We will configure port A as all outputs, port B as all inputs.
+;;; use the SPI_send_command to send the SPI commands.
+;;; This will require the register address in r20 and the register data in r21
+;;; IOCON.BANK DEFAULTS TO 0
 init_port_expander:
-    ldi	r20,0x00              ; register IODIRA (port A data direction)
-    ldi	r21,0x00              ; all outputs
-    call	SPI_Send_Command
-    ldi	r20,0x01              ; register IODIRB (port B data direction)
-    ldi	r21,0xff              ; all inputs
-    call	SPI_Send_Command
-    ldi	r20,0x0d              ; register GPPUB (port B GPIO Pullups)
-    ldi	r21,0xff              ; turn on all pullups
-    call	SPI_Send_Command
-    ret
+    ldi   r20,0x05              ; Setting IOCON
+    ldi   r21,0b00000000
+    call  SPI_Send_Command
+    ldi   r20,0x00              ; IODIRA (port A data direction)
+    ldi   r21,0x00              ; all outputs
+    call  SPI_Send_Command
+    ldi   r20,0x01              ; IODIRB (port B data direction)
+    ldi   r21,0xff              ; all inputs
+    call  SPI_Send_Command
+    ldi   r20,0x0d              ; register GPPUB (port B GPIO Pullups)
+    ldi   r21,0b00001100              ; turn on all pullups
+    call  SPI_Send_Command
+    ldi   r20,0x05              ; GPINTENB (Interrupt on Change)
+    ldi   r21,0b00001100              ; setting pins GPINT5 and GPINT4
+    call  SPI_Send_Command
+    ldi   r20,0x09              ; INTCONB (Compare DEFVAL=1 or Prev Val=0)
+    ldi   r21,0b00001100              ; Turning all the pins to DEFVAL
+    call  SPI_Send_Command
+    ldi   r20,0x07              ; DEFVAL (Sets the compare bit)
+    ldi   r21,0b00001100             ; Turn them all to one
+    call  SPI_Send_Command
+  ret
