@@ -7,8 +7,9 @@
   .ORG 0x100
   .def  gpiob=r16
   .def  gpioa=r23
-sensors: .BYTE 1
 state:   .BYTE 1                 ; Setting pointer - state in data segmen
+sensor:  .BYTE 1
+  .ORG 0x10F
   .CSEG
   .org  0x0000
                                 ; start at beginning of program address
@@ -98,7 +99,7 @@ lcd_state_msg2:.DB  "M:      S:      "
 green_msg:     .DB  "GREEN "
 red_msg:       .DB  "RED   "
 yellow_msg:    .DB  "YELLOW"
-ss1_on:        .DB  "12"
+ss1_on:        .DB  "12  "
 digits:        .DB  "0123456789  "
 
 
@@ -120,11 +121,13 @@ lcd_err:
   clr   gpioa
   clr   gpiob
   clr   r27
-  sts   sensors,r27
+  sts   sensor,r27
   sts   state,r27
 mainLoop:
     clr   r27
-    sts   sensors,r27
+    ldi   r16,0
+    sts   state,r16
+    sts   sensor,r16
     call  t2_loop
     rjmp  state0
 
@@ -145,12 +148,16 @@ state6:
     ldi   r16,6
     sts   state,r16
     call  state_display
-    call lcd_set_sensor_state
+    call  lcd_set_sensor_state
     clr   r16
-    lds   r16,sensors
-    sbrs  r16,0
-    jmp   state7
-    jmp   state6
+    lds   r16,sensor
+    cpi   r16,0
+    breq  state6
+    cpi   r16,2
+    breq  state7
+    cpi   r16,3
+    breq  state7
+    rjmp   state6
 
 
 state7:
@@ -159,10 +166,7 @@ state7:
     sts   state,r16
     call  state_display
     call lcd_set_sensor_state
-    lds   r16,sensors
-    sbrs  r16,2
     rjmp  state8
-    rjmp  state7
 
 state8:
     call  t2_loop
@@ -170,17 +174,35 @@ state8:
     sts   state,r16
     call  state_display
     call lcd_set_sensor_state
+    rjmp  state9
+
+state9:
+    call  t2_loop
+    lds   r16,state
+    inc   r16
+    sts   state,r16
+    call  state_display
+    call lcd_set_sensor_state
+    lds   r16,state
     cpi   r16,12
-    brge  state13
-    rjmp  state8
+    breq  state13
+    rjmp  state9
 
 state13:
     call  t2_loop
+    ldi   r16,13
+    sts   state,r16
     call  state_display
-    call lcd_set_sensor_state
-    lds   r16,sensors
-    sbrc  r16,2
+    call  lcd_set_sensor_state
+    lds   r16,sensor
+    cpi   r16,0b01
+    breq  reset_sensor
     rjmp  mainLoop
+
+reset_sensor:
+    ldi   r16,0
+    sts   sensor,r16
+    call  lcd_set_sensor_state
     rjmp  state13
 
 clear_mcp_int:
@@ -204,10 +226,13 @@ INT0_IR:
     ldi   r20,0x13                ; Address of GPIOB
     call  SPI_Read_Command
     andi  r16,0b00001100
-    sbrc  r16,3
-    call  set_ss2
-    sbrc  r16,2
-    call  set_ss1
+    cpi   r16,0b00001100
+    breq  end_int
+    cpi   r16,0b00001000
+    breq  set_ss2
+    cpi   r16,0b00000100
+    breq  set_ss1
+end_int:
     call  lcd_set_sensor_state
     pop   r27
     pop   r20
@@ -217,17 +242,17 @@ INT0_IR:
     reti                        ; and we're done with the interrupt
 
 set_ss1:
-    lds   r27,sensors
+    lds   r27,sensor
     ori   r27,0b01
     andi  r27,0b11
-    sts   sensors,r27
-    ret
+    sts   sensor,r27
+    rjmp end_int
 set_ss2:
-    lds   r27,sensors
+    lds   r27,sensor
     ori   r27,0b10
     andi  r27,0b11
-    sts   sensors,r27
-    ret
+    sts   sensor,r27
+    rjmp end_int
 
 led_state_display:
     push  r24
@@ -461,36 +486,59 @@ lcd_init_state_msg:
 
 lcd_set_sensor_state:
   ;; Setting
-    lds   r16,sensors
-    cpi   r16,0
-    breq  end_set_sensor
+    lds   r16,sensor
+    cpi   r16,0b11
+    breq  set_both_sensor
 
-    lds   r16,sensors
+    lds   r16,sensor
     cpi   r16,0b01
     breq  commit_1
 
-    lds   r16,sensors
+    lds   r16,sensor
     cpi   r16,0b10
     breq  commit_2
 
-    lds   r16,sensors
-    cpi   r16,0b11
-    breq  set_both_sensor
+    lds   r16,sensor
+    cpi   r16,0b00
+    breq  lcd_clear_both_sensor
 end_set_sensor:
   ret
 
 commit_1:
+    call  lcd_clear_ss2
     call  lcd_set_ss1
     rjmp  end_set_sensor
 
 commit_2:
     call  lcd_set_ss2
+    call  lcd_clear_ss1
     rjmp  end_set_sensor
 
 set_both_sensor:
     call  lcd_set_ss1
     call  lcd_set_ss2
     rjmp  end_set_sensor
+
+lcd_clear_both_sensor:
+    call  lcd_clear_ss1
+    call  lcd_clear_ss2
+    rjmp  end_set_sensor
+
+lcd_clear_ss1:
+    push  r24
+    push  r25
+    push  r27
+    ldi   r24,0x27
+    ldi   r25,0x0E
+    call  LCD_Position
+    ldi   ZL,LOW(ss1_on*2+2)
+    ldi   ZH,HIGH(ss1_on*2+2)
+    ldi   r25,0x01
+    call  LCD_Text
+    pop   r27
+    pop   r25
+    pop   r24
+    ret
 
 lcd_set_ss1:
     push  r24
@@ -501,6 +549,22 @@ lcd_set_ss1:
     call  LCD_Position
     ldi   ZL,LOW(ss1_on*2)
     ldi   ZH,HIGH(ss1_on*2)
+    ldi   r25,0x01
+    call  LCD_Text
+    pop   r27
+    pop   r25
+    pop   r24
+    ret
+
+lcd_clear_ss2:
+    push  r24
+    push  r25
+    push  r27
+    ldi   r24,0x27
+    ldi   r25,0x0F
+    call  LCD_Position
+    ldi   ZL,LOW(ss1_on*2+2)
+    ldi   ZH,HIGH(ss1_on*2+2)
     ldi   r25,0x01
     call  LCD_Text
     pop   r27
@@ -619,7 +683,9 @@ load_state:
     cpi   r16,12
     breq  case_3
     cpi   r16,13
-    brge  case_4
+    breq  case_3
+    cpi   r16,14
+    breq  case_4
     ret
 
 case_0:
