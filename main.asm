@@ -1,9 +1,27 @@
+; Traffic Light State Machine
+; Created: 5/04/2020
+; Author: Christopher Sutton - 44680112
+
 .include "./m328Pdef.inc"
 
-.org    0x0000                  ; start at beginning of program address
+  .DSEG
+state:  .BYTE 1                 ; Setting pointer to state in data segment
+  .CSEG
+  .org  0x0000                  ; start at beginning of program address
 
+lcd_init_str: .DB  0x0C,0x01
+;;; Each line of the message buffer can take 16 Characters
+lcd_init_msg1: .DB  "Chris's Magic   "
+lcd_init_msg2: .DB  "Traffic Lights  "
+lcd_state_msg1:.DB  "STATE:     SS:  "
+lcd_state_msg2:.DB  "M:      S:      "
+green_msg:     .DB  "GREEN "
+red_msg:       .DB  "RED   "
+yellow_msg:    .DB  "YELLOW"
+ss1_on:        .DB  "12"
 call    setup_int               ; Setup IVR to no_interrupt
-                                ; On reset we branch to here
+
+;;; On reset we branch to here
 RESET:                          ; Main program start
   ldi   r16,high(RAMEND)        ; Set Stack Pointer to top of RAM
   out   SPH,r16
@@ -11,78 +29,50 @@ RESET:                          ; Main program start
   out   SPL,r16
   sei                           ; Enable interrupts
 
-                                ; Calling all initialization routines
+;;; Calling all initialization routines
   call init_spi
   call timer_init
   call init_port_expander
+  call lcd_init
 
+  call lcd_startup_msg
+  call t1_loop
+  call lcd_init_state_msg
 
-                                ; Main loop
+;;; Main loop
+clr r24                         ; Button State B1-SS1 B2-SS2
+lcd_err:
 mainLoop:
-  clr   r24
+  clr r26
+  call  read_int
+  sbrc  r24,0
+  ori   r26,0b00000111
+  sbrc  r24,1
+  ori   r26,0b00111000
+
+  ldi   r20,0x14
+  mov   r21,r26
+  call  SPI_Send_Command
+  rjmp  mainLoop
+
+read_int:
+  push  r16
+  push  r20
   ldi   r20,0x0F                ; Address of INTFB
   call  SPI_Read_Command
   sbrc  r16,2
-  ori   r24,0b00000111
+  ori   r24,0b00000001
   sbrc  r16,3
-  ori   r24,0b00111000
-  ldi   r20,0x14                ; Output GPIOA
-  mov   r21,r24
-  call  SPI_Send_Command
-  ldi   r20,0x13                ; Address of INTFB
+  ori   r24,0b00000010
+  ldi   r20,0x13
   call  SPI_Read_Command
-  rjmp mainLoop
-pre_pause:
-  call  check_state
-  rjmp  mainLoop
-
-lights_on:
-  rjmp  mainLoop
-
-check_state:
-  ldi   r20,0x13              ; register GPIOB (port B data input)
-  call  SPI_Read_Command      ; Read the state of button into r16
-  andi  r16,0b0000100         ; test data from pin 3.
-  breq  check_win             ; Hold in pause until button is released
-  rjmp  mainLoop
-
-;;; Reading the Button Pin3 PORTA and holding if pressed
-pause:
-  ldi   r20, 0x13
-  call  SPI_Read_Command
-  andi  r16, 0b0000100
-  breq  pause
-  rjmp  mainLoop
-
-check_win:
-  ldi   r20, 0x14           ; Set to read PORTB
-  call  SPI_Read_Command
-  cpi   r16, 0b00000100     ; Check to see if PORTB has green lit
-  breq  win_sequence
-  call  t1_loop               ;
-  call  t1_loop               ; Pause after press
-  call  t1_loop               ;
-  call  pause                 ; Continue to pause if the button is pressed
+  call  lcd_set_sensor_state
+  pop   r20
+  pop   r16
   ret
 
-win_sequence:
-  ldi   r20, 0x14
-  ldi   r21, 0xFF
-  call  SPI_Send_Command
-  call  t1_loop
-  ldi   r21, 0x00
-  call  SPI_Send_Command
-  call  t1_loop
-  ldi   r21, 0xFF
-  call  SPI_Send_Command
-  call  t1_loop
-  ldi   r21, 0b0000100
-  call  SPI_Send_Command
-  ldi   r17, 0b00000001
-  rjmp  pause
-
-; Helper soubroutines
-; complete interrupt vector table.
+;;; Helper subroutines
+;;; complete interrupt vector table.
 setup_int:
     jmp RESET                   ; Reset
     jmp INT0_IR                 ; IRQ0
@@ -111,69 +101,69 @@ setup_int:
     jmp TWI_IR                  ; 2-wire Serial
     jmp SPM_RDY                 ; SPM Ready
 
-;    and we branch to the final location from here.
-;    Interrupts we cannot handle in this example we just loop at noint
-INT0_IR:		rjmp	noint
-INT1_IR:		rjmp	noint
-PCINT0_IR:		rjmp	noint
-PCINT1_IR:		rjmp		noint
-PCINT2_IR:		rjmp	noint
-WDT_IR:		 rjmp		 noint
-TIM2_COMPA:		 rjmp		 noint
-TIM2_COMPB:		 rjmp		 noint
-TIM2_OVF:		 rjmp		 noint
-TIM1_CAPT:		rjmp		noint
-TIM1_COMPA:		 rjmp		 noint
-TIM1_COMPB:		 rjmp		 noint
-TIM1_OVF:		 rjmp		 noint
-TIM0_COMPA:		 rjmp		 noint
-TIM0_COMPB:		 rjmp		 noint
-TIM0_OVF:		 rjmp		 noint
-SPI_STC:		rjmp	noint
-USART_RXC:		rjmp	noint
-USART_UDRE:		 rjmp		noint
-USART_TXC:		rjmp		noint
-ADC_CC:		 rjmp		noint
-EE_RDY:		 rjmp		noint
-ANA_COMP:		 rjmp		noint
-TWI_IR:		 rjmp		noint
-SPM_RDY:		rjmp		noint
+;;; And we branch to the final location from here.
+;;; Interrupts we cannot handle in this example we just loop at noint
+INT0_IR:    rjmp  noint
+INT1_IR:    rjmp  noint
+PCINT0_IR:  rjmp  noint
+PCINT1_IR:  rjmp  noint
+PCINT2_IR:  rjmp  noint
+WDT_IR:     rjmp  noint
+TIM2_COMPA: rjmp  noint
+TIM2_COMPB: rjmp  noint
+TIM2_OVF:   rjmp  noint
+TIM1_CAPT:  rjmp  noint
+TIM1_COMPA: rjmp  noint
+TIM1_COMPB: rjmp  noint
+TIM1_OVF:   rjmp  noint
+TIM0_COMPA: rjmp  noint
+TIM0_COMPB: rjmp  noint
+TIM0_OVF:   rjmp  noint
+SPI_STC:    rjmp  noint
+USART_RXC:  rjmp  noint
+USART_UDRE: rjmp  noint
+USART_TXC:  rjmp  noint
+ADC_CC:     rjmp  noint
+EE_RDY:     rjmp  noint
+ANA_COMP:   rjmp  noint
+TWI_IR:     rjmp  noint
+SPM_RDY:    rjmp  noint
 
 error:
-noint:		inc	r16
-		rjmp	noint
-ret
+noint:      inc   r16
+    rjmp    noint
+    ret
 
-;
-;
-; Initialise I/O ports and peripherals
-;
-; PB0 LED    Output	1
-; PB1 ??    Output	1
-; PB2 !SS    Output	1
-; PB3 MOSI0    Output	1
-; PB4 MISO0    Input	0
-; PB5 SCK    Output	1
-; PB6 XTAL    X	0
-; PB7 XTAL    X	0
+;;; Initialise I/O ports and peripherals
+;;; PB0 LED    Output	1
+;;; PB1 ??    Output	1
+;;; PB2 !SS    Output	1
+;;; PB3 MOSI0    Output	1
+;;; PB4 MISO0    Input	0
+;;; PB5 SCK    Output	1
+;;; PB6 XTAL    X	0
+;;; PB7 XTAL    X	0
 init_spi:
     ldi	r16,0b00101111        ; set pin directions
     out	DDRB,r16
     sbi	PORTB,2               ; and SS back high
 
-; Setup SPI operations
-; See pp217-218 of the data sheet
+;;; Setup SPI operations
+;;; See pp217-218 of the data sheet
     ldi	r16,(1<<SPE)|(1<<MSTR) ; set master SPI, (SPI mode 0 operation is 00)
     out	SPCR,r16               ; SCK is set fosc/4 => 4MHz
     clr	r16                    ; clear interrupt flags and oscillator mode.
     out	SPSR,r16
     ret
 
-;; Send a command + byte to SPI interface
-;; CMD is in r20, DATA is in r21
-;; r16 is destroyed by this subroutine
-;; SPI_Spec <Device Address><Register Address><Value to write>
+;;; Send a command + byte to SPI interface
+;;; CMD is in r20, DATA is in r21
+;;; r16 is destroyed by this subroutine
+;;; SPI_Spec <Device Address><Register Address><Value to write>
 SPI_Send_Command:
+  ;; Send <Command><Byte> to SPI
+  ;; PARAM: r20 - Address
+  ;; PARAM(Optional): r21 - Data
     cbi	PORTB,2               ; SS low
     ldi	r16,0x40
     call	SPI_SendByte
@@ -183,9 +173,9 @@ SPI_Send_Command:
     call	SPI_SendByte
     sbi	PORTB,2               ; and SS back high
     ret
-; Send a command + byte to SPI interface
-; CMD is in r20, DATA is in r21 (if necessary)
 SPI_Read_Command:
+  ;; Read from address
+  ;; PARAM: r20 - Address
     cbi	PORTB,2               ; SS low
     ldi	r16,0x41
     call	SPI_SendByte
@@ -195,48 +185,19 @@ SPI_Read_Command:
     call	SPI_SendByte
     sbi	PORTB,2               ; and SS back high
     ret
-; Send one SPI byte (Returned data in r16)
 SPI_SendByte:
+  ;; Sending the byte over SPI Data Register
     out   SPDR,r16
 SPI_wait:
+  ;; Waiting for return
     in	r16,SPSR
     sbrs	r16,SPIF
     rjmp	SPI_wait
     in	r16,SPDR
     ret
 
-;;; Helper Functions for LED
-set_led:
-    ;; Turning the led on and shifting
-    ldi	r20,0x14              ; Register OLATA (port A data output)
-    mov	r21,r17               ; Value to write
-    call	SPI_Send_Command
-    cpi	r22,0x01             ; Toggle flag for direction of LED
-    brsh	led_up
-led_down:
-    ;; Checking the pin and shifting the LED down
-    cpi	r17,0b00000001
-    breq	set_up
-    lsr	r17
-    rjmp	pre_pause
-led_up:
-    ;; Checking high pin (Last red) and shifting the LED up
-    cpi	r17, 0b00010000
-    breq	set_down
-    lsl	r17
-    rjmp	pre_pause
-
-set_down:
-    ;; Setting the toggle to down direction
-    ldi	r22,0x00
-    call	led_down
-set_up:
-    ;; Setting the toggle to the up direction
-    ldi	r22,0x01
-    ldi	r17,0x01
-    call	led_up
-
 ;;; Timer Helper Functions
+;;; Delay = 1 Second, 16,000,000/1024 = 15625
 timer_init:
     push	r16
     push	r17
@@ -285,8 +246,8 @@ t1_inner:
 ;;; This will require the register address in r20 and the register data in r21
 ;;; IOCON.BANK DEFAULTS TO 0
 init_port_expander:
-    ldi   r20,0x05              ; Setting IOCON
-    ldi   r21,0b00000000
+    ldi   r20,0x0A              ; Setting IOCON
+    ldi   r21,0b01000000        ; Turning Mirror ON 
     call  SPI_Send_Command
     ldi   r20,0x00              ; IODIRA (port A data direction)
     ldi   r21,0x00              ; all outputs
@@ -307,3 +268,407 @@ init_port_expander:
     ldi   r21,0b00001100             ; Turn them all to one
     call  SPI_Send_Command
   ret
+
+lcd_init:
+    cbi DDRC,4          ; I2C pins as inputs will pullup resistors turned on.
+    cbi DDRC,5
+    sbi PORTC,4
+    sbi PORTC,5
+    sbi DDRC,0          ; port C, bit 0 is out debug bit.
+    cbi PORTC,0
+
+; initialise I/O ports and peripherals
+
+; PC4 SDA0  Bidirectional
+; PC5 SCL0  Bidirectional
+
+
+; I2C clock rate:  assume wants 40KHz
+; Rate:
+; SCL = Fosc / (16 + 2(TWBR).(TWPS[1:0]))
+;     = 16,000,000 / (16 + 2(TWBR).(TWPS[1:0]))
+
+; 40,000 = 16,000,000 / (16 + 2(TWBR).(TWPS[1:0]))
+
+; (16 + 2(TWBR).(TWPS[1:0])) = 16,000,000 / 40,000
+
+; (16 + 2(TWBR).(TWPS[1:0])) = 400
+
+; 2(TWBR).(TWPS[1:0]) = 400 - 16
+
+; 2(TWBR).(TWPS[1:0]) = 386
+
+; (TWBR).(TWPS[1:0]) = 193
+
+; TWBR = 193,   TWPS[1:0] = 0:0 (scale of 1)
+
+;  					  Setup TWI interface
+    ldi		r16,193		; setup TWI frequency scaling
+    sts		TWBR,r16	; Two Wire Interface Bit-rate Register
+    ldi		r16,0x00
+    sts		TWSR,r16
+
+    ldi		r24,0x27	; Setup LCD display at this address (Maybe 0x3f instead)
+    call	LCD_Setup
+    call	LCD_Clear
+    ret
+
+lcd_startup_msg:
+  ;; Line 1
+    ldi   ZL,LOW(lcd_init_msg1*2)
+    ldi   ZH,HIGH(lcd_init_msg1*2)
+    ldi   r25,0x0F
+    call  LCD_Text
+ ;; Line 2
+    ldi   r25,0x40
+    call  LCD_Position
+    ldi   ZL,LOW(lcd_init_msg2*2)
+    ldi   ZH,HIGH(lcd_init_msg2*2)
+    ldi   r25,0x0F
+    call  LCD_Text
+    ret
+
+lcd_init_state_msg:
+  ;; Line 1
+    ldi   r25,0x00
+    call  LCD_Position
+    ldi   ZL,LOW(lcd_state_msg1*2)
+    ldi   ZH,HIGH(lcd_state_msg1*2)
+    ldi   r25,0x0F
+    call  LCD_Text
+ ;; Line 2
+    ldi   r25,0x40
+    call  LCD_Position
+    ldi   ZL,LOW(lcd_state_msg2*2)
+    ldi   ZH,HIGH(lcd_state_msg2*2)
+    ldi   r25,0x0F
+    call  LCD_Text
+    ret
+
+lcd_set_sensor_state:
+  ;; Setting
+    sbrc  r24,0
+    call  lcd_set_ss1
+    sbrc  r24,1
+    call  lcd_set_ss2
+    ret
+
+lcd_set_ss1:
+    push  r24
+    push  r25
+    ldi   r24,0x27
+    ldi   r25,0x0E
+    call  LCD_Position
+    ldi   ZL,LOW(ss1_on*2)
+    ldi   ZH,HIGH(ss1_on*2)
+    ldi   r25,0x01
+    call  LCD_Text
+    pop   r25
+    pop   r24
+    ret
+
+lcd_set_ss2:
+    push  r24
+    push  r25
+    ldi   r24,0x27
+    ldi   r25,0x0F
+    call  LCD_Position
+    ldi   ZL,LOW(ss1_on*2+1)
+    ldi   ZH,HIGH(ss1_on*2+1)
+    ldi   r25,0x01
+    call  LCD_Text
+    pop   r25
+    pop   r24
+    ret
+; Helper Functions
+
+
+
+; Send TWI start address.
+; On return Z flag is set if completed correctly
+; r15 and r16 destroyed
+sendTWI_Start:
+    ldi		r16,(1<<TWINT) | (1<<TWSTA) | (1<<TWEN)
+    sts		TWCR,r16
+
+    call	waitTWI
+
+    lds		r16,TWSR
+    andi	r16,0xf8		; mask out
+    cpi		r16,0x08		; TWSR = START (0x08)
+    ret
+
+; Send TWI slave address. Address is in r16
+; On return Z flag is set if completed correctly
+; r15 and r16 destroyed
+sendTWI_SLA:
+    sts		TWDR,r16
+    ldi		r16,(1<<TWINT) | (1<<TWEN)
+    sts		TWCR,r16
+
+    call	waitTWI
+
+    lds		r16,TWSR
+    andi	r16,0xf8		; mask out
+    cpi		r16,0x18		; TWSR = SLA+W sent, ACK received (0x18)
+    ret
+
+; Send 8 bits of data as two 4 bit nibbles.
+; The data is in r16, the lower 4 bits are in r17
+; we assume the TWI operation is waiting for data to be sent.
+; r15, r18 and r19 all destroyed
+sendTWI_Byte:
+    mov		r18,r16
+    andi	r18,0xF0
+    or		r18,r17
+    call	sendTWI_Nibble
+    mov		r18,r16
+    swap	r18
+    andi	r18,0xF0
+    or		r18,r17
+    call	sendTWI_Nibble
+    ret
+
+; send 4 bits of data, changing the enable bit as we send it.
+; data is in r18. r15, r18 and r19 are destroyed
+
+sendTWI_Nibble:
+    ori		r18,0x04
+    sts		TWDR,r18
+    ldi		r19,(1<<TWINT) | (1<<TWEN)
+    sts		TWCR,r19
+
+    call	waitTWI			; destroys r15
+
+    lds		r19,TWSR
+    andi	r19,0xf8		; mask out
+    cpi		r19,0x28		; TWSR = data sent, ACK received (0x28)
+    brne	sendTWI_Nibble_exit
+
+    andi	r18,0xFB		; set enable bit low
+
+    sts		TWDR,r18
+    ldi		r19,(1<<TWINT) | (1<<TWEN)
+    sts		TWCR,r19
+
+    call	waitTWI
+
+    lds		r19,TWSR
+    andi	r19,0xf8		; mask out
+    cpi		r19,0x28		; TWSR = data sent, ACK received (0x28)
+sendTWI_Nibble_exit:
+    ret
+
+;  Send the data pointed to by the Z register to the TWI interface.
+;  r25 contains the number of bytes to send
+;  r24 contains the address of the I2C controller
+;  r17 contains the lower 4 bits of each nibble to send
+
+SendTWI_Data:
+    call	sendTWI_Start
+    brne	serror
+
+    mov		r16,r24			; use this address
+    add		r16,r16			; and move over the r/w bit
+    call	sendTWI_SLA
+    brne	serror
+
+    cpi		r25,0x00		; any bytes left?
+    breq	sendTWI_done	; if not all done
+
+sendTWI_loop:
+    lpm		r16,Z+
+    call	sendTWI_Byte
+    brne	serror
+
+    dec		r25
+    brne	sendTWI_loop
+
+sendTWI_done:
+serror:
+
+;;; send stop bit and we're done
+sendTWI_Stop:
+    ldi		r16,(1<<TWINT) | (1<<TWEN) | (1<<TWSTO)		; and send stop
+    sts		TWCR,r16
+    ldi		r16,0
+sendTWI_Delay:
+    dec		r16
+    brne	sendTWI_Delay
+    ret
+
+; Wait until the TWI (I2C) interface has sent the byte and received an ack/nak
+; destroys r15
+
+waitTWI:
+    lds	r15,TWCR
+    sbrs	r15,TWINT		; wait until transmitted
+    rjmp	waitTWI
+    ret
+
+; Initialisation strings for the LCD panel
+
+; LCD Position - set the write poswition in the DRAM
+; r24 holds the LCD I2C address
+; r25 holds the address (0-127)
+; r17 holds the lower 4 bits
+
+LCD_Position:
+    call	sendTWI_Start
+    brne	LCD_serror
+
+    mov		r16,r24			; use this address
+    add		r16,r16			; and move over the r/w bit
+    call	sendTWI_SLA
+    brne	LCD_serror
+
+    mov		r16,r25
+    ori		r16,0x80		; set DDRAM address command
+    ldi		r17,8			; backlight
+    call	sendTWI_Byte
+
+    rjmp	sendTWI_Stop
+
+; LCD Clear - Clears the LCD and places the cursor at location 0
+; r24 holds the LCD I2C address
+; r17 holds the lower 4 bits
+
+LCD_Clear:
+    call	sendTWI_Start
+    brne	LCD_serror
+
+    mov		r16,r24			; use this address
+    add		r16,r16			; and move over the r/w bit
+    call	sendTWI_SLA
+    brne	LCD_serror
+
+    ldi		r16,0x01		; set DDRAM address command
+    ldi		r17,8			; backlight
+    call	sendTWI_Byte
+
+    rjmp	sendTWI_Stop
+
+; LCD_Text - send a string to the LCD for displaying
+; Z points to the string,
+; r25 holds the number of characters to print,
+; r24 is the address of the LCD
+
+LCD_Text:
+    call	sendTWI_Start
+    brne	LCD_serror
+
+    mov		r16,r24			; use this address
+    add		r16,r16			; and move over the r/w bit
+    call	sendTWI_SLA
+    brne	LCD_serror
+
+    cpi		r25,0x00		; any bytes left?
+    breq	LCD_Text_done	; if not all done
+    ldi		r17,9			; backlight + data byte
+LCD_Text_loop:
+    lpm		r16,Z+
+    call	sendTWI_Byte
+    brne	LCD_serror
+
+    dec		r25
+    brne	LCD_Text_loop
+
+LCD_Text_done:
+LCD_serror:
+    rjmp	sendTWI_Stop
+
+; LCDSetup - setup the LCD display connected at I2C port in r16
+
+LCD_Setup:
+    call	sendTWI_Start						; send start bit
+    breq	LCD_Setup_0
+    jmp		LCD_Setup_Err
+LCD_Setup_0:
+    mov		r16,r24
+    add		r16,r16
+    call	sendTWI_SLA
+    breq	LCD_Setup_1
+    jmp		LCD_Setup_Err
+LCD_Setup_1:
+    clr		r18
+    clr		r19
+    call	sendTWI_Nibble
+    call	sendTWI_Stop
+
+    ldi		r18,LOW(5)
+    ldi		r19,HIGH(5)
+; call	delay_ms							; wait 5 ms
+; Send the first of three 0x30 to the display
+
+    call	sendTWI_Start						; send start bit
+    breq	LCD_Setup_2
+    jmp		LCD_Setup_Err
+LCD_Setup_2:
+    mov		r16,r24
+    add		r16,r16
+    call	sendTWI_SLA
+    breq	LCD_Setup_3
+    jmp		LCD_Setup_Err
+LCD_Setup_3:
+    ldi		r18,0x30
+    clr		r19
+    call	sendTWI_Nibble
+    call	sendTWI_Stop
+
+    ldi		r18,LOW(5)
+    ldi		r19,HIGH(5)
+;  call	delay_ms							; wait 5 ms
+
+; Send the second of three 0x30 to the display
+
+    call	sendTWI_Start						; send start bit
+    brne	LCD_Setup_Err
+    mov		r16,r24
+    add		r16,r16
+    call	sendTWI_SLA
+    brne	LCD_Setup_Err
+    ldi		r18,0x30
+    clr		r19
+    call	sendTWI_Nibble
+    call	sendTWI_Stop
+
+    ldi		r18,LOW(5)
+    ldi		r19,HIGH(5)
+;  call	delay_ms							; wait 5 ms
+
+; Send the third of three 0x30 to the display
+
+    call	sendTWI_Start						; send start bit
+    brne	LCD_Setup_Err
+    mov		r16,r24
+    add		r16,r16
+    call	sendTWI_SLA
+    brne	LCD_Setup_Err
+    ldi		r18,0x30
+    clr		r19
+    call	sendTWI_Nibble
+    call	sendTWI_Stop
+
+
+; Send 0x28 to the display to reset to 4 bit mode
+
+    call	sendTWI_Start						; send start bit
+    brne	LCD_Setup_Err
+    mov		r16,r24
+    add		r16,r16
+    call	sendTWI_SLA
+    brne	LCD_Setup_Err
+    ldi		r18,0x28
+    clr		r19
+    call	sendTWI_Nibble
+    call	sendTWI_Stop
+
+    ldi		ZL,LOW(lcd_init_str*2)
+    ldi		ZH,HIGH(lcd_init_str*2)
+    ldi		r25,2								; all 2 bytes
+    ldi		r17,8								; lower 4 bits zero (Backlight on)
+    call	SendTWI_Data
+    ret
+
+    LCD_Setup_Err:
+    jmp lcd_err
