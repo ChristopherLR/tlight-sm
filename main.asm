@@ -13,8 +13,8 @@ sensor:  .BYTE 1
   .CSEG
   .org  0x0000
                                 ; start at beginning of program address
-  jmp RESET                   ; Reset
-  jmp INT0_IR                 ; IRQ0
+    jmp RESET                   ; Reset
+    jmp INT0_IR                 ; IRQ0
     jmp INT1_IR                 ; IRQ1
     jmp PCINT0_IR               ; PCINT0
     jmp PCINT1_IR               ; PCINT1
@@ -135,7 +135,7 @@ mainLoop:
 state0:
     call  t2_loop
     call  state_display
-    call lcd_set_sensor_state
+    call  lcd_set_sensor_state
     lds   r16,state
     inc   r16
     sts   state,r16
@@ -149,15 +149,10 @@ state6:
     sts   state,r16
     call  state_display
     call  lcd_set_sensor_state
-    clr   r16
     lds   r16,sensor
     cpi   r16,0
     breq  state6
-    cpi   r16,2
-    breq  state7
-    cpi   r16,3
-    breq  state7
-    rjmp   state6
+    rjmp  state7
 
 
 state7:
@@ -165,7 +160,7 @@ state7:
     ldi   r16,7
     sts   state,r16
     call  state_display
-    call lcd_set_sensor_state
+    call  lcd_set_sensor_state
     rjmp  state8
 
 state8:
@@ -173,7 +168,8 @@ state8:
     ldi   r16,8
     sts   state,r16
     call  state_display
-    call lcd_set_sensor_state
+    call  reset_sensor
+    call  lcd_set_sensor_state
     rjmp  state9
 
 state9:
@@ -182,11 +178,21 @@ state9:
     inc   r16
     sts   state,r16
     call  state_display
-    call lcd_set_sensor_state
+    call  lcd_set_sensor_state
     lds   r16,state
     cpi   r16,12
-    breq  state13
+    brge  state12
     rjmp  state9
+
+state12:
+    call  t2_loop
+    ldi   r16,12
+    sts   state,r16
+    call  state_display
+    lds   r16,sensor
+    cpi   r16,1
+    brge  repeat_reset
+    rjmp  state13
 
 state13:
     call  t2_loop
@@ -194,16 +200,19 @@ state13:
     sts   state,r16
     call  state_display
     call  lcd_set_sensor_state
-    lds   r16,sensor
-    cpi   r16,0b01
-    breq  reset_sensor
     rjmp  mainLoop
+
+repeat_reset:
+    ldi   r16,0
+    sts   sensor,r16
+    call  lcd_set_sensor_state
+    rjmp  state12
 
 reset_sensor:
     ldi   r16,0
     sts   sensor,r16
     call  lcd_set_sensor_state
-    rjmp  state13
+    ret
 
 clear_mcp_int:
     ldi   r20,0x10
@@ -681,11 +690,13 @@ load_state:
     cpi   r16,11
     breq  case_2
     cpi   r16,12
-    breq  case_3
+    breq  case_2
     cpi   r16,13
     breq  case_3
     cpi   r16,14
     breq  case_4
+    cpi   r16,15
+    brge  case_4
     ret
 
 case_0:
@@ -707,7 +718,7 @@ case_2:
     ldi   YH,HIGH(red_msg*2)
     ldi   XL,LOW(green_msg*2)
     ldi   XH,HIGH(green_msg*2)
-    ldi   gpioa, 0b00010100
+    ldi   gpioa, 0b00001100
     ret
 case_3:
     ldi   YL,LOW(red_msg*2)
