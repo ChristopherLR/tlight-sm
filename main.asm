@@ -1,6 +1,7 @@
 ; Traffic Light State Machine
 ; Created: 5/04/2020
 ; Author: Christopher Sutton - 44680112
+; Project uses LCD at address 0x27
 
 .include "./m328Pdef.inc"
   .DSEG
@@ -227,6 +228,8 @@ INT0_IR:
     push  r25
     push  r20
     push  r27
+    in    r16,SREG
+    push  r16
     clr   r27
     call  t1_loop
     ldi   r20,0x10
@@ -243,6 +246,8 @@ INT0_IR:
     breq  set_ss1
 end_int:
     call  lcd_set_sensor_state
+    pop   r16
+    out   SREG,r16
     pop   r27
     pop   r20
     pop   r25
@@ -345,8 +350,6 @@ timer_init:
     clr	r16                 ; diables all interrupts
     sts	TIMSK1, r16         ; [-][-][-][ICIE1][-][-][OCIE1B][TOIE1]
     sts	TCCR1B, r16         ; stop the clock
-    ldi	r17, 0b00000100     ; [-][-][ICF1][-][-][OCF1B][OCF1A][TOV1]
-    out	TIFR1, r17          ; Output Compare Match B -> OCF1B
     ldi	r16,0b00000000      ; TCCR1A
     sts	TCCR1A, r16         ; PORTA - Normal, PORTB - Normal, WGM=0000(Normal)
     ldi	r17, HIGH(1562)     ; 1562 is value of counter
@@ -410,7 +413,7 @@ init_port_expander:
     ldi   r21,0b00001100              ; setting pins GPINT5 and GPINT4
     call  SPI_Send_Command
     ldi   r20,0x09              ; INTCONB (Compare DEFVAL=1 or Prev Val=0)
-    ldi   r21,0b00001100              ; Turning all the pins to DEFVAL
+    ldi   r21,0b00000000              ; Turning all the pins to DEFVAL
     call  SPI_Send_Command
     ldi   r20,0x07              ; DEFVAL (Sets the compare bit)
     ldi   r21,0b00001100             ; Turn them all to one
@@ -450,15 +453,15 @@ lcd_init:
 
 ; TWBR = 193,   TWPS[1:0] = 0:0 (scale of 1)
 
-;  					  Setup TWI interface
-    ldi		r16,193		; setup TWI frequency scaling
-    sts		TWBR,r16	; Two Wire Interface Bit-rate Register
-    ldi		r16,0x00
-    sts		TWSR,r16
+;;; Setup TWI interface
+    ldi   r16,193               ; setup TWI frequency scaling
+    sts   TWBR,r16              ; Two Wire Interface Bit-rate Register
+    ldi   r16,0x00
+    sts   TWSR,r16
 
-    ldi		r24,0x27	; Setup LCD display at this address (Maybe 0x3f instead)
-    call	LCD_Setup
-    call	LCD_Clear
+    ldi   r24,0x27              ; Setup LCD display at this address
+    call  LCD_Setup
+    call  LCD_Clear
     ret
 
 lcd_startup_msg:
@@ -493,6 +496,7 @@ lcd_init_state_msg:
     call  LCD_Text
     ret
 
+;;; Switch statement for processing the sensor state
 lcd_set_sensor_state:
   ;; Setting
     lds   r16,sensor
@@ -533,6 +537,7 @@ lcd_clear_both_sensor:
     call  lcd_clear_ss2
     rjmp  end_set_sensor
 
+;;; Clear the state of sensor 1 to lcd
 lcd_clear_ss1:
     push  r24
     push  r25
@@ -549,6 +554,7 @@ lcd_clear_ss1:
     pop   r24
     ret
 
+;;; Load the state of sensor 1 to lcd
 lcd_set_ss1:
     push  r24
     push  r25
@@ -565,6 +571,8 @@ lcd_set_ss1:
     pop   r24
     ret
 
+
+;;; Clear the state of sensor 2 to lcd
 lcd_clear_ss2:
     push  r24
     push  r25
@@ -581,6 +589,7 @@ lcd_clear_ss2:
     pop   r24
     ret
 
+;;; Load the state of sensor 2 to lcd
 lcd_set_ss2:
     push  r24
     push  r25
@@ -597,6 +606,7 @@ lcd_set_ss2:
     pop   r24
     ret
 
+;;; Displaying the State to the LCD
 state_display:
     push  r24
     push  r25
@@ -626,6 +636,8 @@ lcd_cont:
     pop   r24
     ret
 
+
+;;; Used for the case S<10
 single_digits:
     ldi   r24,0x27
     ldi   r25,0x06
@@ -644,6 +656,7 @@ single_digits:
     call  LCD_Text
     ret
 
+;;; Used for the case S=10+
 double_digits:
     ldi   r24,0x27
     ldi   r25,0x06
@@ -663,6 +676,7 @@ double_digits:
     call  LCD_Text
     jmp  lcd_cont
 
+;;; Essentially a large switch
 load_state:
     lds   r16,state
     cpi   r16,0
@@ -698,7 +712,8 @@ load_state:
     cpi   r16,15
     brge  case_4
     ret
-
+;;; Y reg for M:Message and X for S:Message
+;;; Gpioa used for setting the led's
 case_0:
     ldi   YL,LOW(green_msg*2)
     ldi   YH,HIGH(green_msg*2)
