@@ -13,9 +13,8 @@ sensor:  .BYTE 1
   .ORG 0x10F
   .CSEG
   .org  0x0000
-                                ; start at beginning of program address
     jmp RESET                   ; Reset
-    jmp INT0_IR                 ; IRQ0
+    jmp INT0_IR                 ; IRQ0  0x0001
     jmp INT1_IR                 ; IRQ1
     jmp PCINT0_IR               ; PCINT0
     jmp PCINT1_IR               ; PCINT1
@@ -43,7 +42,8 @@ sensor:  .BYTE 1
 
 ;;; And we branch to the final location from here.
 ;;; Interrupts we cannot handle in this example we just loop at noint
-INT1_IR:    rjmp  noint
+;INT0_IR:    rjmp  noint
+INT1_IR:    rjmp  noint         ;
 PCINT0_IR:  rjmp  noint
 PCINT1_IR:  rjmp  noint
 PCINT2_IR:  rjmp  noint
@@ -91,28 +91,10 @@ RESET:                          ; Main program start
     sei                         ; enable interrupts globally
 
 
-lcd_init_str: .DB  0x0C,0x01
-;;; Each line of the message buffer can take 16 Characters
-lcd_init_msg1: .DB  "Chris's Magic   "
-lcd_init_msg2: .DB  "Traffic Lights  "
-lcd_state_msg1:.DB  "STATE:     SS:  "
-lcd_state_msg2:.DB  "M:      S:      "
-green_msg:     .DB  "GREEN "
-red_msg:       .DB  "RED   "
-yellow_msg:    .DB  "YELLOW"
-ss1_on:        .DB  "12  "
-digits:        .DB  "0123456789  "
-
-
 ;;; Calling all initialization routines
   call init_spi
   call timer_init
   call init_port_expander
-  call lcd_init
-
-  call lcd_startup_msg
-  call t2_loop
-  call lcd_init_state_msg
 
 
 ;;; Main loop
@@ -129,14 +111,11 @@ mainLoop:
     ldi   r16,0
     sts   state,r16
     sts   sensor,r16
-    call  t2_loop
     rjmp  state0
-
 
 state0:
     call  t2_loop
     call  state_display
-    call  lcd_set_sensor_state
     lds   r16,state
     inc   r16
     sts   state,r16
@@ -149,19 +128,16 @@ state6:
     ldi   r16,6
     sts   state,r16
     call  state_display
-    call  lcd_set_sensor_state
     lds   r16,sensor
     cpi   r16,0
     breq  state6
     rjmp  state7
-
 
 state7:
     call  t2_loop
     ldi   r16,7
     sts   state,r16
     call  state_display
-    call  lcd_set_sensor_state
     rjmp  state8
 
 state8:
@@ -170,7 +146,6 @@ state8:
     sts   state,r16
     call  state_display
     call  reset_sensor
-    call  lcd_set_sensor_state
     rjmp  state9
 
 state9:
@@ -179,7 +154,6 @@ state9:
     inc   r16
     sts   state,r16
     call  state_display
-    call  lcd_set_sensor_state
     lds   r16,state
     cpi   r16,12
     brge  state12
@@ -200,19 +174,16 @@ state13:
     ldi   r16,13
     sts   state,r16
     call  state_display
-    call  lcd_set_sensor_state
     rjmp  mainLoop
 
 repeat_reset:
     ldi   r16,0
     sts   sensor,r16
-    call  lcd_set_sensor_state
     rjmp  state12
 
 reset_sensor:
     ldi   r16,0
     sts   sensor,r16
-    call  lcd_set_sensor_state
     ret
 
 clear_mcp_int:
@@ -245,7 +216,6 @@ INT0_IR:
     cpi   r16,0b00000100
     breq  set_ss1
 end_int:
-    call  lcd_set_sensor_state
     pop   r16
     out   SREG,r16
     pop   r27
@@ -267,16 +237,6 @@ set_ss2:
     andi  r27,0b11
     sts   sensor,r27
     rjmp end_int
-
-led_state_display:
-    push  r24
-    push  r25
-    ldi   r20,0x14
-    mov   r21,gpioa
-    call  SPI_Send_Command
-    pop   r25
-    pop   r24
-    ret
 
 ;;; Initialise I/O ports and peripherals
 ;;; PB0 LED    Output	1
@@ -420,261 +380,25 @@ init_port_expander:
     call  SPI_Send_Command
   ret
 
-lcd_init:
-    cbi DDRC,4          ; I2C pins as inputs will pullup resistors turned on.
-    cbi DDRC,5
-    sbi PORTC,4
-    sbi PORTC,5
-    sbi DDRC,0          ; port C, bit 0 is out debug bit.
-    cbi PORTC,0
-
-; initialise I/O ports and peripherals
-
-; PC4 SDA0  Bidirectional
-; PC5 SCL0  Bidirectional
-
-
-; I2C clock rate:  assume wants 40KHz
-; Rate:
-; SCL = Fosc / (16 + 2(TWBR).(TWPS[1:0]))
-;     = 16,000,000 / (16 + 2(TWBR).(TWPS[1:0]))
-
-; 40,000 = 16,000,000 / (16 + 2(TWBR).(TWPS[1:0]))
-
-; (16 + 2(TWBR).(TWPS[1:0])) = 16,000,000 / 40,000
-
-; (16 + 2(TWBR).(TWPS[1:0])) = 400
-
-; 2(TWBR).(TWPS[1:0]) = 400 - 16
-
-; 2(TWBR).(TWPS[1:0]) = 386
-
-; (TWBR).(TWPS[1:0]) = 193
-
-; TWBR = 193,   TWPS[1:0] = 0:0 (scale of 1)
-
-;;; Setup TWI interface
-    ldi   r16,193               ; setup TWI frequency scaling
-    sts   TWBR,r16              ; Two Wire Interface Bit-rate Register
-    ldi   r16,0x00
-    sts   TWSR,r16
-
-    ldi   r24,0x27              ; Setup LCD display at this address
-    call  LCD_Setup
-    call  LCD_Clear
-    ret
-
-lcd_startup_msg:
-  ;; Line 1
-    ldi   ZL,LOW(lcd_init_msg1*2)
-    ldi   ZH,HIGH(lcd_init_msg1*2)
-    ldi   r25,0x0F
-    call  LCD_Text
- ;; Line 2
-    ldi   r25,0x40
-    call  LCD_Position
-    ldi   ZL,LOW(lcd_init_msg2*2)
-    ldi   ZH,HIGH(lcd_init_msg2*2)
-    ldi   r25,0x0F
-    call  LCD_Text
-    ret
-
-lcd_init_state_msg:
-  ;; Line 1
-    ldi   r25,0x00
-    call  LCD_Position
-    ldi   ZL,LOW(lcd_state_msg1*2)
-    ldi   ZH,HIGH(lcd_state_msg1*2)
-    ldi   r25,0x0F
-    call  LCD_Text
- ;; Line 2
-    ldi   r25,0x40
-    call  LCD_Position
-    ldi   ZL,LOW(lcd_state_msg2*2)
-    ldi   ZH,HIGH(lcd_state_msg2*2)
-    ldi   r25,0x0F
-    call  LCD_Text
-    ret
-
-;;; Switch statement for processing the sensor state
-lcd_set_sensor_state:
-  ;; Setting
-    lds   r16,sensor
-    cpi   r16,0b11
-    breq  set_both_sensor
-
-    lds   r16,sensor
-    cpi   r16,0b01
-    breq  commit_1
-
-    lds   r16,sensor
-    cpi   r16,0b10
-    breq  commit_2
-
-    lds   r16,sensor
-    cpi   r16,0b00
-    breq  lcd_clear_both_sensor
-end_set_sensor:
-  ret
-
-commit_1:
-    call  lcd_clear_ss2
-    call  lcd_set_ss1
-    rjmp  end_set_sensor
-
-commit_2:
-    call  lcd_set_ss2
-    call  lcd_clear_ss1
-    rjmp  end_set_sensor
-
-set_both_sensor:
-    call  lcd_set_ss1
-    call  lcd_set_ss2
-    rjmp  end_set_sensor
-
-lcd_clear_both_sensor:
-    call  lcd_clear_ss1
-    call  lcd_clear_ss2
-    rjmp  end_set_sensor
-
-;;; Clear the state of sensor 1 to lcd
-lcd_clear_ss1:
-    push  r24
-    push  r25
-    push  r27
-    ldi   r24,0x27
-    ldi   r25,0x0E
-    call  LCD_Position
-    ldi   ZL,LOW(ss1_on*2+2)
-    ldi   ZH,HIGH(ss1_on*2+2)
-    ldi   r25,0x01
-    call  LCD_Text
-    pop   r27
-    pop   r25
-    pop   r24
-    ret
-
-;;; Load the state of sensor 1 to lcd
-lcd_set_ss1:
-    push  r24
-    push  r25
-    push  r27
-    ldi   r24,0x27
-    ldi   r25,0x0E
-    call  LCD_Position
-    ldi   ZL,LOW(ss1_on*2)
-    ldi   ZH,HIGH(ss1_on*2)
-    ldi   r25,0x01
-    call  LCD_Text
-    pop   r27
-    pop   r25
-    pop   r24
-    ret
-
-
-;;; Clear the state of sensor 2 to lcd
-lcd_clear_ss2:
-    push  r24
-    push  r25
-    push  r27
-    ldi   r24,0x27
-    ldi   r25,0x0F
-    call  LCD_Position
-    ldi   ZL,LOW(ss1_on*2+2)
-    ldi   ZH,HIGH(ss1_on*2+2)
-    ldi   r25,0x01
-    call  LCD_Text
-    pop   r27
-    pop   r25
-    pop   r24
-    ret
-
-;;; Load the state of sensor 2 to lcd
-lcd_set_ss2:
-    push  r24
-    push  r25
-    push  r27
-    ldi   r24,0x27
-    ldi   r25,0x0F
-    call  LCD_Position
-    ldi   ZL,LOW(ss1_on*2+1)
-    ldi   ZH,HIGH(ss1_on*2+1)
-    ldi   r25,0x01
-    call  LCD_Text
-    pop   r27
-    pop   r25
-    pop   r24
-    ret
-
-;;; Displaying the State to the LCD
+;;; Displaying state to LEDs
 state_display:
     push  r24
     push  r25
-    ldi   r24,0x27
-    ldi   r25,0x06
-    call  LCD_Position
     call  load_state
     call  led_state_display
-    lds   r16, state
-    cpi   r16,10
-    brge  double_digits
-    call  single_digits
-lcd_cont:
-    ldi   r25,0x42
-    call  LCD_Position
-    mov   ZL,YL
-    mov   ZH,YH
-    ldi   r25,0x06
-    call  LCD_Text
-    ldi   r25,0x4A
-    call  LCD_Position
-    mov   ZL,XL
-    mov   ZH,XH
-    ldi   r25,0x06
-    call  LCD_Text
     pop   r25
     pop   r24
     ret
 
-
-;;; Used for the case S<10
-single_digits:
-    ldi   r24,0x27
-    ldi   r25,0x06
-    call  LCD_Position
-    ldi   ZL,LOW(digits*2)
-    ldi   ZH,HIGH(digits*2)
-    lds   r16, state
-    add   ZL,r16
-    ldi   r25,0x01
-    call  LCD_Text
-    ldi   r25,0x07
-    call  LCD_Position
-    ldi   ZL,LOW(digits*2+10)
-    ldi   ZH,HIGH(digits*2+10)
-    ldi   r25,0x01
-    call  LCD_Text
+led_state_display:
+    push  r24
+    push  r25
+    ldi   r20,0x14
+    mov   r21,gpioa
+    call  SPI_Send_Command
+    pop   r25
+    pop   r24
     ret
-
-;;; Used for the case S=10+
-double_digits:
-    ldi   r24,0x27
-    ldi   r25,0x06
-    call  LCD_Position
-    ldi   ZL,LOW(digits*2+1)
-    ldi   ZH,HIGH(digits*2+1)
-    ldi   r25,0x01
-    call  LCD_Text
-    ldi   r25,0x07
-    call  LCD_Position
-    ldi   ZL,LOW(digits*2)
-    ldi   ZH,HIGH(digits*2)
-    lds   r16, state
-    add   ZL,r16
-    subi  ZL,10
-    ldi   r25,0x01
-    call  LCD_Text
-    jmp  lcd_cont
 
 ;;; Essentially a large switch
 load_state:
@@ -715,31 +439,15 @@ load_state:
 ;;; Y reg for M:Message and X for S:Message
 ;;; Gpioa used for setting the led's
 case_0:
-    ldi   YL,LOW(green_msg*2)
-    ldi   YH,HIGH(green_msg*2)
-    ldi   XL,LOW(red_msg*2)
-    ldi   XH,HIGH(red_msg*2)
     ldi   gpioa, 0b00100001
     ret
 case_1:
-    ldi   YL,LOW(yellow_msg*2)
-    ldi   YH,HIGH(yellow_msg*2)
-    ldi   XL,LOW(red_msg*2)
-    ldi   XH,HIGH(red_msg*2)
     ldi   gpioa, 0b00010001
     ret
 case_2:
-    ldi   YL,LOW(red_msg*2)
-    ldi   YH,HIGH(red_msg*2)
-    ldi   XL,LOW(green_msg*2)
-    ldi   XH,HIGH(green_msg*2)
     ldi   gpioa, 0b00001100
     ret
 case_3:
-    ldi   YL,LOW(red_msg*2)
-    ldi   YH,HIGH(red_msg*2)
-    ldi   XL,LOW(yellow_msg*2)
-    ldi   XH,HIGH(yellow_msg*2)
     ldi   gpioa, 0b00001010
     ret
 case_4:
@@ -747,294 +455,3 @@ case_4:
     sts   state,r16
     rjmp  case_0
 ; Helper Functions
-
-
-
-; Send TWI start address.
-; On return Z flag is set if completed correctly
-; r15 and r16 destroyed
-sendTWI_Start:
-    ldi		r16,(1<<TWINT) | (1<<TWSTA) | (1<<TWEN)
-    sts		TWCR,r16
-
-    call	waitTWI
-
-    lds		r16,TWSR
-    andi	r16,0xf8		; mask out
-    cpi		r16,0x08		; TWSR = START (0x08)
-    ret
-
-; Send TWI slave address. Address is in r16
-; On return Z flag is set if completed correctly
-; r15 and r16 destroyed
-sendTWI_SLA:
-    sts		TWDR,r16
-    ldi		r16,(1<<TWINT) | (1<<TWEN)
-    sts		TWCR,r16
-
-    call	waitTWI
-
-    lds		r16,TWSR
-    andi	r16,0xf8		; mask out
-    cpi		r16,0x18		; TWSR = SLA+W sent, ACK received (0x18)
-    ret
-
-; Send 8 bits of data as two 4 bit nibbles.
-; The data is in r16, the lower 4 bits are in r17
-; we assume the TWI operation is waiting for data to be sent.
-; r15, r18 and r19 all destroyed
-sendTWI_Byte:
-    mov		r18,r16
-    andi	r18,0xF0
-    or		r18,r17
-    call	sendTWI_Nibble
-    mov		r18,r16
-    swap	r18
-    andi	r18,0xF0
-    or		r18,r17
-    call	sendTWI_Nibble
-    ret
-
-; send 4 bits of data, changing the enable bit as we send it.
-; data is in r18. r15, r18 and r19 are destroyed
-
-sendTWI_Nibble:
-    ori		r18,0x04
-    sts		TWDR,r18
-    ldi		r19,(1<<TWINT) | (1<<TWEN)
-    sts		TWCR,r19
-
-    call	waitTWI			; destroys r15
-
-    lds		r19,TWSR
-    andi	r19,0xf8		; mask out
-    cpi		r19,0x28		; TWSR = data sent, ACK received (0x28)
-    brne	sendTWI_Nibble_exit
-
-    andi	r18,0xFB		; set enable bit low
-
-    sts		TWDR,r18
-    ldi		r19,(1<<TWINT) | (1<<TWEN)
-    sts		TWCR,r19
-
-    call	waitTWI
-
-    lds		r19,TWSR
-    andi	r19,0xf8		; mask out
-    cpi		r19,0x28		; TWSR = data sent, ACK received (0x28)
-sendTWI_Nibble_exit:
-    ret
-
-;  Send the data pointed to by the Z register to the TWI interface.
-;  r25 contains the number of bytes to send
-;  r24 contains the address of the I2C controller
-;  r17 contains the lower 4 bits of each nibble to send
-
-SendTWI_Data:
-    call	sendTWI_Start
-    brne	serror
-
-    mov		r16,r24			; use this address
-    add		r16,r16			; and move over the r/w bit
-    call	sendTWI_SLA
-    brne	serror
-
-    cpi		r25,0x00		; any bytes left?
-    breq	sendTWI_done	; if not all done
-
-sendTWI_loop:
-    lpm		r16,Z+
-    call	sendTWI_Byte
-    brne	serror
-
-    dec		r25
-    brne	sendTWI_loop
-
-sendTWI_done:
-serror:
-
-;;; send stop bit and we're done
-sendTWI_Stop:
-    ldi		r16,(1<<TWINT) | (1<<TWEN) | (1<<TWSTO)		; and send stop
-    sts		TWCR,r16
-    ldi		r16,0
-sendTWI_Delay:
-    dec		r16
-    brne	sendTWI_Delay
-    ret
-
-; Wait until the TWI (I2C) interface has sent the byte and received an ack/nak
-; destroys r15
-
-waitTWI:
-    lds	r15,TWCR
-    sbrs	r15,TWINT		; wait until transmitted
-    rjmp	waitTWI
-    ret
-
-; Initialisation strings for the LCD panel
-
-; LCD Position - set the write poswition in the DRAM
-; r24 holds the LCD I2C address
-; r25 holds the address (0-127)
-; r17 holds the lower 4 bits
-
-LCD_Position:
-    call	sendTWI_Start
-    brne	LCD_serror
-
-    mov		r16,r24			; use this address
-    add		r16,r16			; and move over the r/w bit
-    call	sendTWI_SLA
-    brne	LCD_serror
-
-    mov		r16,r25
-    ori		r16,0x80		; set DDRAM address command
-    ldi		r17,8			; backlight
-    call	sendTWI_Byte
-
-    rjmp	sendTWI_Stop
-
-; LCD Clear - Clears the LCD and places the cursor at location 0
-; r24 holds the LCD I2C address
-; r17 holds the lower 4 bits
-
-LCD_Clear:
-    call	sendTWI_Start
-    brne	LCD_serror
-
-    mov		r16,r24			; use this address
-    add		r16,r16			; and move over the r/w bit
-    call	sendTWI_SLA
-    brne	LCD_serror
-
-    ldi		r16,0x01		; set DDRAM address command
-    ldi		r17,8			; backlight
-    call	sendTWI_Byte
-
-    rjmp	sendTWI_Stop
-
-; LCD_Text - send a string to the LCD for displaying
-; Z points to the string,
-; r25 holds the number of characters to print,
-; r24 is the address of the LCD
-
-LCD_Text:
-    call	sendTWI_Start
-    brne	LCD_serror
-
-    mov		r16,r24			; use this address
-    add		r16,r16			; and move over the r/w bit
-    call	sendTWI_SLA
-    brne	LCD_serror
-
-    cpi		r25,0x00		; any bytes left?
-    breq	LCD_Text_done	; if not all done
-    ldi		r17,9			; backlight + data byte
-LCD_Text_loop:
-    lpm		r16,Z+
-    call	sendTWI_Byte
-    brne	LCD_serror
-
-    dec		r25
-    brne	LCD_Text_loop
-
-LCD_Text_done:
-LCD_serror:
-    rjmp	sendTWI_Stop
-
-; LCDSetup - setup the LCD display connected at I2C port in r16
-
-LCD_Setup:
-    call	sendTWI_Start						; send start bit
-    breq	LCD_Setup_0
-    jmp		LCD_Setup_Err
-LCD_Setup_0:
-    mov		r16,r24
-    add		r16,r16
-    call	sendTWI_SLA
-    breq	LCD_Setup_1
-    jmp		LCD_Setup_Err
-LCD_Setup_1:
-    clr		r18
-    clr		r19
-    call	sendTWI_Nibble
-    call	sendTWI_Stop
-
-    ldi		r18,LOW(5)
-    ldi		r19,HIGH(5)
-; call	delay_ms							; wait 5 ms
-; Send the first of three 0x30 to the display
-
-    call	sendTWI_Start						; send start bit
-    breq	LCD_Setup_2
-    jmp		LCD_Setup_Err
-LCD_Setup_2:
-    mov		r16,r24
-    add		r16,r16
-    call	sendTWI_SLA
-    breq	LCD_Setup_3
-    jmp		LCD_Setup_Err
-LCD_Setup_3:
-    ldi		r18,0x30
-    clr		r19
-    call	sendTWI_Nibble
-    call	sendTWI_Stop
-
-    ldi		r18,LOW(5)
-    ldi		r19,HIGH(5)
-;  call	delay_ms							; wait 5 ms
-
-; Send the second of three 0x30 to the display
-
-    call	sendTWI_Start						; send start bit
-    brne	LCD_Setup_Err
-    mov		r16,r24
-    add		r16,r16
-    call	sendTWI_SLA
-    brne	LCD_Setup_Err
-    ldi		r18,0x30
-    clr		r19
-    call	sendTWI_Nibble
-    call	sendTWI_Stop
-
-    ldi		r18,LOW(5)
-    ldi		r19,HIGH(5)
-;  call	delay_ms							; wait 5 ms
-
-; Send the third of three 0x30 to the display
-
-    call	sendTWI_Start						; send start bit
-    brne	LCD_Setup_Err
-    mov		r16,r24
-    add		r16,r16
-    call	sendTWI_SLA
-    brne	LCD_Setup_Err
-    ldi		r18,0x30
-    clr		r19
-    call	sendTWI_Nibble
-    call	sendTWI_Stop
-
-
-; Send 0x28 to the display to reset to 4 bit mode
-
-    call	sendTWI_Start						; send start bit
-    brne	LCD_Setup_Err
-    mov		r16,r24
-    add		r16,r16
-    call	sendTWI_SLA
-    brne	LCD_Setup_Err
-    ldi		r18,0x28
-    clr		r19
-    call	sendTWI_Nibble
-    call	sendTWI_Stop
-
-    ldi		ZL,LOW(lcd_init_str*2)
-    ldi		ZH,HIGH(lcd_init_str*2)
-    ldi		r25,2								; all 2 bytes
-    ldi		r17,8								; lower 4 bits zero (Backlight on)
-    call	SendTWI_Data
-    ret
-
-    LCD_Setup_Err:
-    jmp lcd_err
